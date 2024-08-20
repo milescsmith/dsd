@@ -31,32 +31,16 @@ def init_logger(verbose: int, save_log: bool = True, msg_format: str | None = No
         case _:
             log_level = "ERROR"  # Catches ERROR and CRITICAL
 
-    logger.add(
-        sink=stderr,
-        format=msg_format,
-        level=log_level,
-        filter="dsd",
-        colorize=True
-    )
-    # config = {
-    #     "handlers": [
-    #         {"sink": stderr, "format": msg_format, "level": log_level, "filter": "dsd"},
-    #     ]
-    # }
+    config = {
+        "handlers": [
+            {"sink": stderr, "format": msg_format, "level": log_level, "filter": __package__},
+        ]
+    }
+    logger.configure(**config)
 
     if save_log:
-        # config["handlers"].append(
-        #     {
-        #         "sink": f"dsd_{datetime.datetime.now(tz=timezone).strftime('%Y-%d-%m--%H-%M-%S')}.log",
-        #         "level": "DEBUG",
-        #         "format": "{time:YYYY-MM-DD at HH:mm:ss} | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan>·-·<level>{message}</level>",
-        #         "filter": "dsd",
-        #         "backtrace": True,
-        #         "diagnose": True,
-        #     }
-        # )
         logger.add(
-            sink=f"dsd_{datetime.datetime.now(tz=timezone).strftime('%Y-%d-%m--%H-%M-%S')}.log",
+            sink=f"{__package__}_{datetime.datetime.now(tz=timezone).strftime('%Y-%d-%m--%H-%M-%S')}.log",
             level=log_level,
             format="{time:YYYY-MM-DD at HH:mm:ss} | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan>·-·<level>{message}</level>",
             filter="dsd",
@@ -65,4 +49,3 @@ def init_logger(verbose: int, save_log: bool = True, msg_format: str | None = No
             colorize=True
         )
 
-    # logger.configure(**config)

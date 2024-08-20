@@ -2,14 +2,14 @@ import contextlib
 from importlib.metadata import PackageNotFoundError, version
 
 try:
-    __version__ = version(__name__)
+    __version__ = version(__package__)
 except PackageNotFoundError:  # pragma: no cover
     __version__ = "unknown"
 
 import warnings
 from multiprocessing import cpu_count
 from pathlib import Path
-from typing import Literal, Annotated
+from typing import Annotated, Literal
 
 import numpy as np
 import pandas as pd
@@ -17,18 +17,39 @@ import scanpy as sc
 import scar
 import scvi
 import torch
+import typer
 from anndata import ImplicitModificationWarning
 from loguru import logger
+from rich import print as rprint
 from tenacity import RetryError, Retrying, stop_after_attempt
 
 from dsd.logging import init_logger
 
-import typer
+logger.disable(__package__)
 
+app = typer.Typer(name="dsd_clean", help="cli for dsd", no_args_is_help=True,
+    rich_markup_mode="markdown",)
 
-app = typer.Typer(name="dsd_clean", help="cli for dsd")
+verbosity_level = 0
 
+def version_callback(version: Annotated[bool, typer.Option("--version")] = False) -> None:  # FBT001
+    if version:
+        rprint(f"[yellow]{__package__}[/] version: [bold blue]{__version__}[/]")
+        raise typer.Exit()
 
+# @app.callback()
+# def verbosity(
+#     verbose: Annotated[
+#         int,
+#         typer.Option(
+#             "-v",
+#             "--verbose",
+#             help="Control output verbosity. Pass this argument multiple times to increase the amount of output.",
+#             count=True,
+#         ),
+#     ] = 0,
+# ) -> None:
+#     verbosity_level = verbose  # noqa: F841
 
 @app.callback(invoke_without_command=True)
 @app.command(no_args_is_help=True)
@@ -40,8 +61,14 @@ def cli(
     raw_sample_matrix: Annotated[
         Path,
         typer.Argument(),
-    ]
+    ],
+    debug: Annotated[int, typer.Option("--debug", help="Print extra information for debugging.", count=True)] = 0,  # nFBT002
+    version: Annotated[
+        bool,
+        typer.Option("--version", callback=version_callback, help="Print version number.", is_eager=True),
+    ] = False,
 ):
+    init_logger(3)
     clean_scrnaseq(sample_matrix, raw_sample_matrix)
 
 @logger.catch
@@ -62,6 +89,7 @@ def clean_scrnaseq(
     num_cpus: int | None = None,
     skip_make_unique: bool = False,
 ) -> None:
+    init_logger(debug)
     sample_matrix = Path(sample_matrix) if isinstance(sample_matrix, str) else sample_matrix
     raw_sample_matrix = Path(raw_sample_matrix) if isinstance(raw_sample_matrix, str) else raw_sample_matrix
     if not num_cpus:
@@ -73,7 +101,6 @@ def clean_scrnaseq(
     elif isinstance(output_path, str):
         output_path = Path(output_path)
 
-    init_logger(3)
     logger.debug("Loading filtered sample_matrix")
     # if you see some warning about variable names not being unique,
     # you might be tempted to try to "fix" this by running `adata.obs_names_make_unique()` and

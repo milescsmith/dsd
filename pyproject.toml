@@ -4,7 +4,7 @@ build-backend = "pdm.backend"
 
 [project]
 name = "dsd"
-version = "0.1.0"
+version = "0.2.0"
 description = "Process data as per data standards documents"
 authors = [
     {name = "Miles Smith", email = "miles-smith@omrf.org"},
