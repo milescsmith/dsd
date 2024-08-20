@@ -63,7 +63,7 @@ def clean_scrnaseq(
         if "Gene Expression" in adata.var["feature_types"].values:
             logger.debug("Gene expression modality found")
             rnaseq = True
-            gex = adata[:, adata.var["feature_types"] == "Gene Exp1 ression"].copy()
+            gex = adata[:, adata.var["feature_types"] == "Gene Expression"].copy()
             gex.obs_names_make_unique()
             gex.var_names_make_unique()
             unfiltered_gex = unfiltered_adata[:, unfiltered_adata.var["feature_types"] == "Gene Expression"].copy()

@@ -35,11 +35,11 @@ def cli(
     ] = None,
     sample_matrix: Annotated[
         Path | None,
-        typer.Option("--filterd_matrix", help="The filtered sample matrix produced by Cell Ranger."),
+        typer.Option("-f", "--filtered_matrix", help="The filtered sample matrix produced by Cell Ranger."),
     ] = None,
     raw_sample_matrix: Annotated[
         Path | None,
-        typer.Option("--raw_matrix", help="The raw sample matrix produced by Cell Ranger."),
+        typer.Option("-r", "--raw_matrix", help="The raw sample matrix produced by Cell Ranger."),
     ] = None,
     verbose: Annotated[
         int,
