@@ -1,57 +1,19 @@
-from importlib.metadata import PackageNotFoundError, version
+import contextlib
+import warnings
+from multiprocessing import cpu_count
+from pathlib import Path
+from typing import Literal
 
+import numpy as np
+import pandas as pd
+import scanpy as sc
+import scar
+import scvi
+import torch
+from anndata import ImplicitModificationWarning
 from loguru import logger
+from tenacity import RetryError, Retrying, stop_after_attempt
 
-try:
-    __version__ = version(__package__)
-except PackageNotFoundError:  # pragma: no cover
-    __version__ = "unknown"
-
-logger.disable(__package__)
-
-app = typer.Typer(name="dsd_clean", help="cli for dsd", no_args_is_help=True,
-    rich_markup_mode="markdown",)
-
-verbosity_level = 0
-
-def version_callback(version: Annotated[bool, typer.Option("--version")] = False) -> None:  # FBT001
-    if version:
-        rprint(f"[yellow]{__package__}[/] version: [bold blue]{__version__}[/]")
-        raise typer.Exit()
-
-# @app.callback()
-# def verbosity(
-#     verbose: Annotated[
-#         int,
-#         typer.Option(
-#             "-v",
-#             "--verbose",
-#             help="Control output verbosity. Pass this argument multiple times to increase the amount of output.",
-#             count=True,
-#         ),
-#     ] = 0,
-# ) -> None:
-#     verbosity_level = verbose  # noqa: F841
-
-@app.callback(invoke_without_command=True)
-@app.command(no_args_is_help=True)
-def cli(
-    sample_matrix: Annotated[
-        Path,
-        typer.Argument(),
-    ],
-    raw_sample_matrix: Annotated[
-        Path,
-        typer.Argument(),
-    ],
-    debug: Annotated[int, typer.Option("--debug", "-d", help="Print extra information for debugging.", count=True)] = 0,  # nFBT002
-    version: Annotated[
-        bool,
-        typer.Option("--version", callback=version_callback, help="Print version number.", is_eager=True),
-    ] = False,
-):
-    init_logger(debug)
-    clean_scrnaseq(sample_matrix, raw_sample_matrix)
 
 @logger.catch
 def clean_scrnaseq(
@@ -82,7 +44,6 @@ def clean_scrnaseq(
     elif isinstance(output_path, str):
         output_path = Path(output_path)
 
-    logger.debug("Loading filtered sample_matrix")
     # if you see some warning about variable names not being unique,
     # you might be tempted to try to "fix" this by running `adata.obs_names_make_unique()` and
     # `adata.var_names_make_unique(); you would, however, be wrong to do so.
@@ -92,31 +53,34 @@ def clean_scrnaseq(
     # tensor_b` error - this is because scar doesn't know how to handle proteins with the suffix and has
     # incorrectly generated the ambient_profile -- the prot.uns["ambient_profile_all"] and
     # prot.uns["ambient_profile_Antibody Capture"] do not match adata.var_names, and things get messed up.
-    adata = sc.read_10x_h5(sample_matrix, gex_only=False)
-    logger.debug("Loading raw sample_matrix")
-    unfiltered_adata = sc.read_10x_h5(raw_sample_matrix, gex_only=False)
+    with warnings.catch_warnings():
+        logger.debug("Loading filtered sample_matrix")
+        warnings.filterwarnings("ignore", category=UserWarning, module="anndata")
+        adata = sc.read_10x_h5(sample_matrix, gex_only=False)
+        logger.debug("Loading raw sample_matrix")
+        unfiltered_adata = sc.read_10x_h5(raw_sample_matrix, gex_only=False)
 
-    if "Gene Expression" in adata.var["feature_types"].values:
-        logger.debug("Gene expression modality found")
-        rnaseq = True
-        gex = adata[:, adata.var["feature_types"] == "Gene Expression"].copy()
-        gex.obs_names_make_unique()
-        gex.var_names_make_unique()
-        unfiltered_gex = unfiltered_adata[:, unfiltered_adata.var["feature_types"] == "Gene Expression"].copy()
-        unfiltered_gex.obs_names_make_unique()
-        unfiltered_gex.var_names_make_unique()
-    else:
-        logger.debug("No gene expression data found. Skipping.")
-        rnaseq=False
+        if "Gene Expression" in adata.var["feature_types"].values:
+            logger.debug("Gene expression modality found")
+            rnaseq = True
+            gex = adata[:, adata.var["feature_types"] == "Gene Expression"].copy()
+            gex.obs_names_make_unique()
+            gex.var_names_make_unique()
+            unfiltered_gex = unfiltered_adata[:, unfiltered_adata.var["feature_types"] == "Gene Expression"].copy()
+            unfiltered_gex.obs_names_make_unique()
+            unfiltered_gex.var_names_make_unique()
+        else:
+            logger.debug("No gene expression data found. Skipping.")
+            rnaseq = False
 
-    if "Antibody Capture" in adata.var["feature_types"].values:
-        logger.debug("Antibody capture modality found")
-        citeseq = True
-        prot = adata[:, adata.var["feature_types"] == "Antibody Capture"].copy()
-        unfiltered_prot = unfiltered_adata[:, unfiltered_adata.var["feature_types"] == "Antibody Capture"].copy()
-    else:
-        logger.debug("No antibody data found. Skipping.")
-        citeseq = False
+        if "Antibody Capture" in adata.var["feature_types"].values:
+            logger.debug("Antibody capture modality found")
+            citeseq = True
+            prot = adata[:, adata.var["feature_types"] == "Antibody Capture"].copy()
+            unfiltered_prot = unfiltered_adata[:, unfiltered_adata.var["feature_types"] == "Antibody Capture"].copy()
+        else:
+            logger.debug("No antibody data found. Skipping.")
+            citeseq = False
 
     if device is None:
         match (torch.cuda.is_available(), torch.backends.mps.is_available()):
@@ -182,16 +146,13 @@ def clean_scrnaseq(
             warnings.filterwarnings("ignore", category=RuntimeWarning, module="multiprocessing")
             warnings.filterwarnings("ignore", category=UserWarning, module="scvi")
             vae.train(early_stopping=True, accelerator=device, load_sparse_tensor=True, check_val_every_n_epoch=1)
-
-        logger.debug("Converting scVI model to SOLO")
-        solo = scvi.external.SOLO.from_scvi_model(vae)
-        logger.debug("Training SOLO model")
-        with warnings.catch_warnings():
+            logger.debug("Converting scVI model to SOLO")
+            solo = scvi.external.SOLO.from_scvi_model(vae)
+            logger.debug("Training SOLO model")
             warnings.filterwarnings("ignore", category=RuntimeWarning, module="multiprocessing")
-            solo.train()
-        logger.debug("Predicting singlets/doublet probabilities and tTransferring noise and singlet probabilites")
-        with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning, module="torch")
+            solo.train(early_stopping=True)
+            logger.debug("Predicting singlets/doublet probabilities and transferring noise and singlet probabilites")
             gex.obs["solo_call"] = solo.predict(soft=False)
             gex.obs = pd.merge(gex.obs, solo.predict(return_logits=True), left_index=True, right_index=True)
 
@@ -217,9 +178,9 @@ def clean_scrnaseq(
         logger.debug(f"Removing cells with < {min_genes} genes")
         sc.pp.filter_cells(filtered_gex, min_genes=min_genes)
         logger.debug(f"Removing cells with < {min_gene_total_counts} gene counts")
-        sc.pp.filter_cells(filtered_gex, min_counts = min_gene_total_counts)
+        sc.pp.filter_cells(filtered_gex, min_counts=min_gene_total_counts)
         logger.debug(f"Removing cells with > {max_percent_mt} mitochondrial genes")
-        filtered_gex = filtered_gex[filtered_gex.obs.pct_counts_mt < max_percent_mt*100, :].copy()
+        filtered_gex = filtered_gex[filtered_gex.obs.pct_counts_mt < max_percent_mt * 100, :].copy()
 
         filtered_gex.raw = gex
 
@@ -256,16 +217,16 @@ def clean_scrnaseq(
 
         logger.info("Generating ambient antibody model")
         prot_scar = scar.model(
-                raw_count=prot,  # In the case of Anndata object, scar will automatically use the estimated ambient_profile present in adata.uns.
-                ambient_profile=prot.uns["ambient_profile_Antibody Capture"],
-                feature_type="ADT",
-                count_model="binomial",
-                device=device,
-                )
+            raw_count=prot,  # In the case of Anndata object, scar will automatically use the estimated ambient_profile present in adata.uns.
+            ambient_profile=prot.uns["ambient_profile_Antibody Capture"],
+            feature_type="ADT",
+            count_model="binomial",
+            device=device,
+        )
 
         logger.debug("Finished model generation, training model")
         # TODO: make a batch_size option or retry loop
-        prot_scar.train(epochs=500, verbose=True) #, batch_size=32, verbose=True)
+        prot_scar.train(epochs=500, verbose=True)  # , batch_size=32, verbose=True)
 
         logger.debug("Inferring ambient antibody noise")
         prot_scar.inference()
@@ -287,6 +248,3 @@ def clean_scrnaseq(
         logger.info(f"Writing data to {antibody_output_file.resolve()}")
 
         filtered_prot.write(antibody_output_file)
-
-if __name__ == "__main__":
-    app()  # pragma: no cover
