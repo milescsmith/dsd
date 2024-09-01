@@ -17,9 +17,9 @@ def init_logger(verbose: int, save_log: bool = True, msg_format: str | None = No
 
     if msg_format is None:
         if in_notebook:
-            msg_format = "<green>{name}</green>:<red>{function}</red>:<blue>{line}</blue>·-·<level>{message}</level>"
+            msg_format = "<green>{name}</green>:<red>{function}</red>:<blue>{line}</blue> - <level>{message}</level>"
         else:
-            msg_format = "{time:YYYY-MM-DD at HH:mm:ss} | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan>·-·<level>{message}</level>"
+            msg_format = "{time:YYYY-MM-DD HH:mm:ss}|<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
 
     match verbose:
         case 3:
@@ -42,7 +42,7 @@ def init_logger(verbose: int, save_log: bool = True, msg_format: str | None = No
         logger.add(
             sink=f"{__package__}_{datetime.datetime.now(tz=timezone).strftime('%Y-%d-%m--%H-%M-%S')}.log",
             level=log_level,
-            format="{time:YYYY-MM-DD at HH:mm:ss} | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan>·-·<level>{message}</level>",
+            format="{time:YYYY-MM-DD HH:mm:ss}|<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
             filter="dsd",
             backtrace=True,
             diagnose=True,

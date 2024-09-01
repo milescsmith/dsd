@@ -62,13 +62,13 @@ def cli(
         Path,
         typer.Argument(),
     ],
-    debug: Annotated[int, typer.Option("--debug", help="Print extra information for debugging.", count=True)] = 0,  # nFBT002
+    debug: Annotated[int, typer.Option("--debug", "-d", help="Print extra information for debugging.", count=True)] = 0,  # nFBT002
     version: Annotated[
         bool,
         typer.Option("--version", callback=version_callback, help="Print version number.", is_eager=True),
     ] = False,
 ):
-    init_logger(3)
+    init_logger(debug)
     clean_scrnaseq(sample_matrix, raw_sample_matrix)
 
 @logger.catch
@@ -89,7 +89,6 @@ def clean_scrnaseq(
     num_cpus: int | None = None,
     skip_make_unique: bool = False,
 ) -> None:
-    init_logger(debug)
     sample_matrix = Path(sample_matrix) if isinstance(sample_matrix, str) else sample_matrix
     raw_sample_matrix = Path(raw_sample_matrix) if isinstance(raw_sample_matrix, str) else raw_sample_matrix
     if not num_cpus:
