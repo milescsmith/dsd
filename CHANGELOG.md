@@ -1,3 +1,9 @@
+## [0.4.0] - 2024-09-01
+
+### Added
+
+- Added `std_quality_control()` and `std_process()`
+
 ## [0.3.1] - 2024-08-14
 
 ### Fixed
@@ -27,6 +33,7 @@
 
 - All
 
+[0.4.0]: https://github.com/milescsmith/dsd/releases/compare/0.3.1..0.4.0
 [0.3.1]: https://github.com/milescsmith/dsd/releases/compare/0.3.0..0.3.1
 [0.3.0]: https://github.com/milescsmith/dsd/releases/compare/0.2.0..0.3.0
 [0.2.0]: https://github.com/milescsmith/dsd/releases/compare/0.1.0..0.2.0

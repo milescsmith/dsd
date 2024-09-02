@@ -4,7 +4,7 @@ build-backend = "pdm.backend"
 
 [project]
 name = "dsd"
-version = "0.3.1"
+version = "0.4.0"
 description = "Process data as per data standards documents"
 authors = [
     {name = "Miles Smith", email = "miles-smith@omrf.org"},
@@ -19,6 +19,7 @@ dependencies = [
     "loguru>=0.7.2",
     "rich>=13.7.1",
     "typer>=0.12.4",
+    "scikit-image>=0.24.0",
 ]
 requires-python = ">=3.11"
 readme = "README.md"
