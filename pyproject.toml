@@ -10,10 +10,8 @@ authors = [
     {name = "Miles Smith", email = "miles-smith@omrf.org"},
 ]
 dependencies = [
-    "scar @ git+https://github.com/Novartis/scar",
     "scanpy[skmisc]>=1.10.2",
     "muon>=0.1.6",
-    "scvi-tools>=1.1.5",
     "pandas>=2.2.2",
     "tenacity>=9.0.0",
     "loguru>=0.7.2",
@@ -25,11 +23,14 @@ requires-python = ">=3.11"
 readme = "README.md"
 license = {text = "BSD-3"}
 
-# [project.optional-dependencies]
+[project.optional-dependencies]
 # cuda = [
 #     "jax[cuda12]>=0.4.31",
 # ]
-
+scvi = [
+    "scvi-tools>=1.1.5",
+    "scar @ git+https://github.com/Novartis/scar",
+]
 
 [project.scripts]
 dsd = "dsd.cli:app"

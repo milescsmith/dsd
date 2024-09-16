@@ -12,9 +12,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import scanpy as sc
-import scar
 import scipy as sp
-import scvi
 import torch
 from anndata import AnnData, ImplicitModificationWarning
 from loguru import logger
@@ -518,6 +516,14 @@ def scvi_clean_scrnaseq(
     num_cpus: int | None = None,
     skip_make_unique: bool = False,
 ) -> None:
+    try:
+        import scar
+        import scvi
+    except ImportError as err:
+        msg = "scVI and/or scAR are not installed. Please reinstall dsd with `dsd[scvi]`"
+        logger.exception(msg)
+        raise ImportError(msg) from err
+
     sample_matrix = Path(sample_matrix) if isinstance(sample_matrix, str) else sample_matrix
     raw_sample_matrix = Path(raw_sample_matrix) if isinstance(raw_sample_matrix, str) else raw_sample_matrix
     if not num_cpus:
@@ -709,6 +715,13 @@ def scvi_clean_scrnaseq(
 def solo_dedoubler(
     adata: AnnData, inplace: bool = True, device: Literal["cuda", "mps", "cpu"] = "cpu"
 ) -> AnnData | None:
+    try:
+        import scvi
+    except ImportError as err:
+        msg = "scVI and/or scAR are not installed. Please reinstall dsd with `dsd[scvi]`"
+        logger.exception(msg)
+        raise ImportError(msg) from err
+
     logger.debug("Setting up gene expression AnnData for SOLO")
     scvi.model.SCVI.setup_anndata(adata)
     logger.info("Training scVI model for SOLO")

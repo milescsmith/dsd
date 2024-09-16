@@ -1,3 +1,9 @@
+## [0.6.1] - 2024-09-16
+
+### Changed
+
+- Make scVI and scAR optional installs
+
 ## [0.6.0] - 2024-09-16
 
 ### Changed
