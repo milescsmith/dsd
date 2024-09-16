@@ -1,3 +1,15 @@
+## [0.6.0] - 2024-09-16
+
+### Changed
+
+- Fixed `dsd.scrnaseq.std_quality_contol` so that it ACTUALLY FILTERS OUT CELLS WITH HIGH MITO READS!
+
+## [0.5.0] - 2024-09-16
+
+### Added
+
+- A verson of `dsd.scrnaseq.std_quality_contol` that functions on an anndata object
+
 ## [0.4.0] - 2024-09-01
 
 ### Added
@@ -33,6 +45,8 @@
 
 - All
 
+[0.6.0]: https://github.com/milescsmith/dsd/releases/compare/0.5.0..0.6.0
+[0.5.0]: https://github.com/milescsmith/dsd/releases/compare/0.4.0..0.5.0
 [0.4.0]: https://github.com/milescsmith/dsd/releases/compare/0.3.1..0.4.0
 [0.3.1]: https://github.com/milescsmith/dsd/releases/compare/0.3.0..0.3.1
 [0.3.0]: https://github.com/milescsmith/dsd/releases/compare/0.2.0..0.3.0

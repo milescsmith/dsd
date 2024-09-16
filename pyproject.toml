@@ -4,14 +4,14 @@ build-backend = "pdm.backend"
 
 [project]
 name = "dsd"
-version = "0.4.0"
+version = "0.6.0"
 description = "Process data as per data standards documents"
 authors = [
     {name = "Miles Smith", email = "miles-smith@omrf.org"},
 ]
 dependencies = [
     "scar @ git+https://github.com/Novartis/scar",
-    "scanpy>=1.10.2",
+    "scanpy[skmisc]>=1.10.2",
     "muon>=0.1.6",
     "scvi-tools>=1.1.5",
     "pandas>=2.2.2",

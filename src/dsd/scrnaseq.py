@@ -2,7 +2,7 @@ import contextlib
 import warnings
 from collections.abc import Iterable
 from enum import StrEnum
-from functools import partial
+from functools import partial, singledispatch
 from multiprocessing import cpu_count
 from pathlib import Path
 from typing import Literal
@@ -21,9 +21,7 @@ from loguru import logger
 from mudata import MuData
 from muon import prot as pt
 from numba import float32, float64, guvectorize, int32, int64, vectorize
-from scipy.sparse import (
-    issparse,
-)
+from scipy.sparse import issparse
 from scipy.stats import median_abs_deviation
 from tenacity import RetryError, Retrying, stop_after_attempt
 
@@ -33,9 +31,10 @@ from dsd.logging import init_logger
 class DoubletFilter(StrEnum):
     scrublet = "scrublet"
     vaeda = "vaeda"
+    solo = "solo"
 
 
-def value_percentile(arr: np.ndarray) -> np.ndarray:
+def value_percentile(arr: npt.NDArray) -> npt.NDArray:
     # hacky way to loop over the array of counts and calculate each's quantile.
     # not sure why percentileofscore isn't already vectorized
     # and we have to use partial here because percentileofscore's function
@@ -66,8 +65,8 @@ def above_below(x: float, lower: float, upper: float) -> float:
 
 @guvectorize([(float64[:, :], float64, float64, float64[:, :])], "(m,n),(),()->(m,n)")
 def percentile_trim_rows(
-    arr: npt.ArrayLike, lower: float = 0.10, upper: float = 0.99, res: npt.ArrayLike = None
-) -> npt.ArrayLike:
+    arr: npt.NDArray, lower: float = 0.10, upper: float = 0.99, res: npt.NDArray = None
+) -> npt.NDArray:
     """
     Row-by-row, calculate the lower and upper percentiles and then use those to replace values that are
     below or above them, respectively
@@ -101,8 +100,128 @@ def find_isotype_controls(
     return adata.var.loc[lambda y: y["control"]].index.to_list()
 
 
-def std_quality_control(
-    mdata: MuData,
+@singledispatch
+def std_quality_control(data, verbose=False):
+    pass
+
+
+# The code here obviously overlaps with std_quality_control_mdata - should we deduplicate that?
+@std_quality_control.register
+def std_quality_control_anndata(
+    data: AnnData,
+    min_genes: int = 500,
+    max_gene_total_counts: int | None = None,  # = 6000,
+    max_gene_counts_percentile: float | None = None,  # = 0.95,
+    min_gene_total_counts: int = 1000,
+    min_n_cells_by_counts: int = 3,
+    max_percent_mt: float = 10.0,
+    remove_by_std_deviation: bool = False,
+    doublet_algorithm: DoubletFilter = DoubletFilter.scrublet,
+    device: Literal["cuda", "mps", "cpu"] | None = None,
+    verbose: bool = False,
+):
+    """Standard quality control filtering for paired scRNAseq/CITEseq sample. For use as part of creating a data standard packakage.
+
+    Parameters
+    ----------
+    data : AnnData
+        AnnData object to process.
+    min_genes : int, optional
+        Minimum number of detected genes necessary to keep a cell, by default 500
+    max_gene_total_counts : int | None, optional
+        Maximum total gene counts permitted in each cell; cells with more are removed. If "max_gene_counts_percentile" is also passed, this is ignored., by default None
+    max_gene_counts_percentile : float | None, optional
+        Maximum gene count percentile cutoff beyond which cells are removed, by default None
+    min_gene_total_counts : int, optional
+        _description_, by default 1000
+    min_n_cells_by_counts : int, optional
+        _description_, by default 3
+    max_percent_mt : float, optional
+        _description_, by default 10.0
+    remove_by_std_deviation : bool, optional
+        _description_, by default False
+    doublet_algorithm : DoubletFilter, optional
+        Method to use for doublet detection. Must be either "scrublet" or "vaeda", though "vaeda" doesn't necessarily work due to current tensorflow/tf-keras incompatibilities, by default DoubletFilter.scrublet
+    device : Literal["cuda", "mps", "cpu"], optional
+        Device to use for model building. Ignored unless SOLO is used as the doublet algorithm
+    verbose : bool, optional
+        Enable verbose logging, by default False
+    """
+    if verbose:
+        logger.enable(__package__)
+        init_logger(3)
+    else:
+        init_logger(0)
+
+    data.var_names_make_unique()
+    data.var["mt"] = data.var_names.str.startswith("MT-")
+    data.var["ribo"] = data.var_names.str.startswith(("RPS", "RPL"))
+    data.var["hb"] = data.var_names.str.contains(r"^HB[^(P)]", regex=True)
+
+    logger.info("Calculating gene expression QC metrics")
+    sc.pp.calculate_qc_metrics(
+        adata=data,
+        qc_vars=["mt", "ribo", "hb"],
+        percent_top=(20, 50, 100, 200, 500),
+        log1p=True,
+        inplace=True,
+    )
+
+    logger.info("Filtering cells and genes")
+    data.obs["outlier"] = (
+        is_outlier(data, "log1p_total_counts", 5)
+        | is_outlier(data, "log1p_n_genes_by_counts", 5)
+        | is_outlier(data, "pct_counts_in_top_20_genes", 5)
+        | is_outlier(data, "pct_counts_mt", 3)
+        | (data.obs["pct_counts_mt"] > max_percent_mt)
+    )
+
+    if remove_by_std_deviation:
+        logger.info("Removing 'outliers'")
+        mu.pp.filter_obs(data, "outlier", lambda x: ~x)
+    else:
+        if max_gene_counts_percentile:
+            if max_gene_total_counts:
+                logger.warning(
+                    "Both max_genes_quantile and max_total_counts were specified. Ignoring max_total_counts."
+                )
+            logger.info("Calculating gene expression count percentiles")
+            data.obs["gene_counts_percentile"] = value_percentile(data.obs["total_counts"])
+            logger.info("Filtering cells by gene expression count percentile")
+            mu.pp.filter_obs(data, "gene_counts_percentile", lambda x: x < max_gene_counts_percentile)
+        elif max_gene_total_counts:
+            logger.info("Filtering cells by total gene expression counts")
+            mu.pp.filter_obs(data, "total_counts", lambda x: x <= min_gene_total_counts)
+
+        mu.pp.filter_var(data, "n_cells_by_counts", lambda x: x >= min_n_cells_by_counts)
+        mu.pp.filter_obs(data, "n_genes_by_counts", lambda x: x >= min_genes)
+        mu.pp.filter_obs(data, "pct_counts_mt", lambda x: x <= max_percent_mt)
+
+    match doublet_algorithm:
+        case DoubletFilter.scrublet:
+            logger.info("Running Scrublet")
+            sc.pp.scrublet(data)
+            mu.pp.filter_obs(data, "predicted_doublet", lambda x: ~x)
+        case DoubletFilter.solo:
+            device = find_device if device is None else device.lower()
+            solo_dedoubler(data, inplace=True, device=device)
+        case DoubletFilter.vaeda:
+            try:
+                import vaeda
+            except ImportError:
+                msg = "Cannot import vaeda"
+                logger.error(msg, exc_info=True)
+            logger.info("Running vaeda")
+            adata = vaeda.vaeda(data.copy(), seed=20150318)
+            data.obs = data.obs.join(adata.obs[["vaeda_scores", "vaeda_calls"]], how="left")
+            mu.pp.filter_obs(data, "vaeda_calls", lambda x: x == "singlet")
+
+    logger.info("Finished QC")
+
+
+@std_quality_control.register
+def std_quality_control_mudata(
+    data: MuData,
     min_genes: int = 500,
     max_gene_total_counts: int | None = None,  # = 6000,
     max_gene_counts_percentile: float | None = None,  # = 0.95,
@@ -119,13 +238,14 @@ def std_quality_control(
     remove_all_feature_outliers: bool = False,
     max_isotype_counts_percentile: float = 95.0,
     doublet_algorithm: DoubletFilter = DoubletFilter.scrublet,
+    device: Literal["cuda", "mps", "cpu"] | None = None,
     verbose: bool = False,
 ):
     """Standard quality control filtering for paired scRNAseq/CITEseq sample. For use as part of creating a data standard packakage.
 
     Parameters
     ----------
-    mdata : MuData
+    data : MuData
         MuData object to process. Should have 'rna' and 'prot' modalities.
     min_genes : int, optional
         Minimum number of detected genes necessary to keep a cell, by default 500
@@ -159,6 +279,8 @@ def std_quality_control(
         Should cells with any counts above the 95th percentile be removed? Currently unused, by default False
     doublet_algorithm : DoubletFilter, optional
         Method to use for doublet detection. Must be either "scrublet" or "vaeda", though "vaeda" doesn't necessarily work due to current tensorflow/tf-keras incompatibilities, by default DoubletFilter.scrublet
+    device : Literal["cuda", "mps", "cpu"], optional
+        Device to use for model building. Ignored unless SOLO is used as the doublet algorithm
     verbose : bool, optional
         Enable verbose logging, by default False
     """
@@ -167,13 +289,14 @@ def std_quality_control(
         init_logger(3)
     else:
         init_logger(0)
-    mdata.var_names_make_unique()
-    mdata["rna"].var["mt"] = mdata["rna"].var_names.str.startswith("MT-")
-    mdata["rna"].var["ribo"] = mdata["rna"].var_names.str.startswith(("RPS", "RPL"))
-    mdata["rna"].var["hb"] = mdata["rna"].var_names.str.contains(r"^HB[^(P)]", regex=True)
+
+    data.var_names_make_unique()
+    data["rna"].var["mt"] = data["rna"].var_names.str.startswith("MT-")
+    data["rna"].var["ribo"] = data["rna"].var_names.str.startswith(("RPS", "RPL"))
+    data["rna"].var["hb"] = data["rna"].var_names.str.contains(r"^HB[^(P)]", regex=True)
     if not protein_isotype_controls:
         protein_isotype_controls = find_isotype_controls(
-            mdata["prot"], protein_control_pattern, protein_control_pattern_regex
+            data["prot"], protein_control_pattern, protein_control_pattern_regex
         )
         logger.info(
             f"Found and using {protein_isotype_controls} as isotype controls. If that is incorrect, try passing the actual names to use."
@@ -182,11 +305,11 @@ def std_quality_control(
         protein_isotype_controls = (
             [protein_isotype_controls] if isinstance(protein_isotype_controls, str) else protein_isotype_controls
         )
-        mdata["prot"].var["control"] = mdata["prot"].var["control"].isin(protein_isotype_controls)
+        data["prot"].var["control"] = data["prot"].var["control"].isin(protein_isotype_controls)
 
     logger.info("Calculating gene expression QC metrics")
     sc.pp.calculate_qc_metrics(
-        adata=mdata["rna"],
+        adata=data["rna"],
         qc_vars=["mt", "ribo", "hb"],
         percent_top=(20, 50, 100, 200, 500),
         log1p=True,
@@ -196,7 +319,7 @@ def std_quality_control(
     logger.info("Calculating antibody QC metrics")
     try:
         sc.pp.calculate_qc_metrics(
-            adata=mdata["prot"],
+            adata=data["prot"],
             percent_top=(5, 10, 15),
             var_type="antibodies",
             qc_vars=("control",),
@@ -208,7 +331,7 @@ def std_quality_control(
             "Calculating antibody QC metrics failed, probably due to too few antibodies. Retrying without calculating the top antibodies by count."
         )
         sc.pp.calculate_qc_metrics(
-            adata=mdata["prot"],
+            adata=data["prot"],
             percent_top=None,
             var_type="antibodies",
             qc_vars=("control",),
@@ -217,23 +340,23 @@ def std_quality_control(
         )
 
     logger.info("Filtering cells and genes")
-    mdata["rna"].obs["outlier"] = (
-        is_outlier(mdata["rna"], "log1p_total_counts", 5)
-        | is_outlier(mdata["rna"], "log1p_n_genes_by_counts", 5)
-        | is_outlier(mdata["rna"], "pct_counts_in_top_20_genes", 5)
-        | is_outlier(mdata["rna"], "pct_counts_mt", 3)
-        | (mdata["rna"].obs["pct_counts_mt"] > max_percent_mt)
+    data["rna"].obs["outlier"] = (
+        is_outlier(data["rna"], "log1p_total_counts", 5)
+        | is_outlier(data["rna"], "log1p_n_genes_by_counts", 5)
+        | is_outlier(data["rna"], "pct_counts_in_top_20_genes", 5)
+        | is_outlier(data["rna"], "pct_counts_mt", 3)
+        | (data["rna"].obs["pct_counts_mt"] > max_percent_mt)
     )
 
     logger.info("Filtering cells and antibodies")
-    mdata["prot"].obs["outlier"] = is_outlier(mdata["prot"], "log1p_total_counts", 5) | is_outlier(
-        mdata["prot"], "log1p_n_antibodies_by_counts", 5
+    data["prot"].obs["outlier"] = is_outlier(data["prot"], "log1p_total_counts", 5) | is_outlier(
+        data["prot"], "log1p_n_antibodies_by_counts", 5
     )
 
     if remove_by_std_deviation:
         logger.info("Removing 'outliers'")
-        mu.pp.filter_obs(mdata["rna"], "outlier", lambda x: ~x)
-        mu.pp.filter_obs(mdata["prot"], "outlier", lambda x: ~x)
+        mu.pp.filter_obs(data["rna"], "outlier", lambda x: ~x)
+        mu.pp.filter_obs(data["prot"], "outlier", lambda x: ~x)
     else:
         if max_gene_counts_percentile:
             if max_gene_total_counts:
@@ -241,12 +364,12 @@ def std_quality_control(
                     "Both max_genes_quantile and max_total_counts were specified. Ignoring max_total_counts."
                 )
             logger.info("Calculating gene expression count percentiles")
-            mdata["rna"].obs["gene_counts_percentile"] = value_percentile(mdata["rna"].obs["total_counts"])
+            data["rna"].obs["gene_counts_percentile"] = value_percentile(data["rna"].obs["total_counts"])
             logger.info("Filtering cells by gene expression count percentile")
-            mu.pp.filter_obs(mdata["rna"], "gene_counts_percentile", lambda x: x < max_gene_counts_percentile)
+            mu.pp.filter_obs(data["rna"], "gene_counts_percentile", lambda x: x < max_gene_counts_percentile)
         elif max_gene_total_counts:
             logger.info("Filtering cells by total gene expression counts")
-            mu.pp.filter_obs(mdata["rna"], "total_counts", lambda x: x <= min_gene_total_counts)
+            mu.pp.filter_obs(data["rna"], "total_counts", lambda x: x <= min_gene_total_counts)
 
         if max_protein_counts_percentile:
             if max_protein_total_counts:
@@ -254,29 +377,30 @@ def std_quality_control(
                     "Both max_protein_counts_quantile and max_protein_total_counts were specified. Ignoring max_total_counts."
                 )
             logger.info("Calculating antibody count percentiles")
-            mdata["prot"].obs["protein_counts_percentile"] = value_percentile(mdata["prot"].obs["total_counts"])
+            data["prot"].obs["protein_counts_percentile"] = value_percentile(data["prot"].obs["total_counts"])
             logger.info("Filtering cells by antibody count percentile")
-            mu.pp.filter_obs(mdata["prot"], "protein_counts_percentile", lambda x: x < max_protein_counts_percentile)
+            mu.pp.filter_obs(data["prot"], "protein_counts_percentile", lambda x: x < max_protein_counts_percentile)
         elif max_protein_total_counts:
             logger.info("Filtering cells by total antibody counts")
-            mu.pp.filter_obs(mdata["prot"], "total_counts", lambda x: x < max_protein_counts_percentile)
+            mu.pp.filter_obs(data["prot"], "total_counts", lambda x: x < max_protein_counts_percentile)
 
-        mu.pp.filter_var(mdata["rna"], "n_cells_by_counts", lambda x: x >= min_n_cells_by_counts)
-        mu.pp.filter_obs(mdata["rna"], "n_genes_by_counts", lambda x: x >= min_genes)
+        mu.pp.filter_var(data["rna"], "n_cells_by_counts", lambda x: x >= min_n_cells_by_counts)
+        mu.pp.filter_obs(data["rna"], "n_genes_by_counts", lambda x: x >= min_genes)
+        mu.pp.filter_obs(data["rna"], "pct_counts_mt", lambda x: x <= max_percent_mt)
 
     if remove_isotype_outliers:
         for isotype in protein_isotype_controls:
             logger.info(f"Calculating {isotype} percentiles")
-            values = mdata["prot"][:, isotype].X.toarray() if issparse(mdata["prot"].X) else mdata["prot"][:, isotype].X
-            mdata["prot"].obs[f"{isotype} percentile"] = value_percentile(values.flatten())
+            values = data["prot"][:, isotype].X.toarray() if issparse(data["prot"].X) else data["prot"][:, isotype].X
+            data["prot"].obs[f"{isotype} percentile"] = value_percentile(values.flatten())
 
-        mu.pp.intersect_obs(mdata)
+        mu.pp.intersect_obs(data)
         for isotype in protein_isotype_controls:
             logger.info(f"Removing {isotype} outliers")
             # do this twice because if it is all in the same loop, the quantile
             # calculations are affected by the removal of the first noisy samples
             mu.pp.filter_obs(
-                mdata,
+                data,
                 f"prot:{isotype} percentile",
                 lambda x: x < max_isotype_counts_percentile,
             )
@@ -284,8 +408,11 @@ def std_quality_control(
     match doublet_algorithm:
         case DoubletFilter.scrublet:
             logger.info("Running Scrublet")
-            sc.pp.scrublet(mdata["rna"])
-            mu.pp.filter_obs(mdata["rna"], "predicted_doublet", lambda x: ~x)
+            sc.pp.scrublet(data["rna"])
+            mu.pp.filter_obs(data["rna"], "predicted_doublet", lambda x: ~x)
+        case DoubletFilter.solo:
+            device = find_device if device is None else device.lower()
+            solo_dedoubler(data["rna"], inplace=True, device=device)
         case DoubletFilter.vaeda:
             try:
                 import vaeda
@@ -293,15 +420,60 @@ def std_quality_control(
                 msg = "Cannot import vaeda"
                 logger.error(msg, exc_info=True)
             logger.info("Running vaeda")
-            adata = vaeda.vaeda(mdata["rna"].copy(), seed=20150318)
-            mdata["rna"].obs = mdata["rna"].obs.join(adata.obs[["vaeda_scores", "vaeda_calls"]], how="left")
-            mu.pp.filter_obs(mdata["rna"], "vaeda_calls", lambda x: x == "singlet")
+            adata = vaeda.vaeda(data["rna"].copy(), seed=20150318)
+            data["rna"].obs = data["rna"].obs.join(adata.obs[["vaeda_scores", "vaeda_calls"]], how="left")
+            mu.pp.filter_obs(data["rna"], "vaeda_calls", lambda x: x == "singlet")
 
-    mu.pp.intersect_obs(mdata)
+    mu.pp.intersect_obs(data)
     logger.info("Finished QC")
 
 
-def std_process(
+@singledispatch
+def std_process(filtered):
+    pass
+
+
+@std_process.register
+def std_process_anndata(
+    filtered: AnnData,
+):
+    filtered.layers["counts"] = filtered.X.copy()
+    filtered.raw = filtered
+
+    logger.info("Normalizing")
+    sc.pp.normalize_total(
+        filtered, target_sum=1e4, exclude_highly_expressed=False, key_added="norm_factor", inplace=True
+    )
+
+    logger.info("Log-transforming")
+    sc.pp.log1p(filtered, base=None, copy=False, chunked=False, layer=None, obsm=None)
+
+    logger.info("Finding variable genes")
+    sc.pp.highly_variable_genes(
+        filtered,
+        flavor="seurat_v3_paper",
+        layer="counts",
+        n_top_genes=4000,
+        inplace=True,
+        batch_key=None,
+        # min_mean=0.0125,
+        # max_mean=3,
+        # min_disp=0.5,
+    )
+
+    logger.info("Scaling data")
+    sc.pp.scale(
+        filtered,
+        zero_center=True,
+        max_value=10,
+        copy=False,
+        obsm=None,
+        mask_obs=None,
+    )
+
+
+@std_process.register
+def std_process_mudata(
     filtered: MuData,
     raw: MuData | None = None,
     protein_isotype_controls: str | Iterable[str] | None = None,
@@ -325,19 +497,7 @@ def std_process(
             add_layer=False,
         )
 
-    logger.info("Normalizing")
-    sc.pp.normalize_total(adata=filtered["rna"], target_sum=1e4)
-
-    logger.info("Log-transforming")
-    sc.pp.log1p(filtered["rna"])
-
-    logger.info("Finding variable genes")
-    sc.pp.highly_variable_genes(filtered["rna"], min_mean=0.0125, max_mean=3, min_disp=0.5)
-
-    filtered["rna"].raw = filtered["rna"]
-
-    logger.info("Scaling data")
-    sc.pp.scale(filtered["rna"], max_value=10)
+    std_process_anndata(filtered["rna"])
 
 
 @logger.catch
@@ -407,17 +567,7 @@ def scvi_clean_scrnaseq(
             logger.debug("No antibody data found. Skipping.")
             citeseq = False
 
-    if device is None:
-        match (torch.cuda.is_available(), torch.backends.mps.is_available()):
-            case (True, False) | (True, True):
-                device = "cuda"
-            case (False, True):
-                device = "mps"
-            case (False, False):
-                device = "cpu"
-    if device == "cuda":
-        torch.set_float32_matmul_precision("high")
-    logger.debug(f"Using {device} to generate models")
+    device = find_device() if device is None else device
 
     if rnaseq:
         logger.debug("Processing RNAseq data")
@@ -463,26 +613,7 @@ def scvi_clean_scrnaseq(
         gex.layers["scar_denoised"] = gex_scar.native_counts.copy()
         logger.debug("Finished inferring noise with scAR")
 
-        logger.debug("Setting up gene expression AnnData for SOLO")
-        scvi.model.SCVI.setup_anndata(gex)
-        logger.info("Training scVI gex model")
-        vae = scvi.model.SCVI(gex)
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RuntimeWarning, module="multiprocessing")
-            warnings.filterwarnings("ignore", category=UserWarning, module="scvi")
-            vae.train(early_stopping=True, accelerator=device, load_sparse_tensor=True, check_val_every_n_epoch=1)
-            logger.debug("Converting scVI model to SOLO")
-            solo = scvi.external.SOLO.from_scvi_model(vae)
-            logger.debug("Training SOLO model")
-            warnings.filterwarnings("ignore", category=RuntimeWarning, module="multiprocessing")
-            warnings.filterwarnings("ignore", category=UserWarning, module="torch")
-            solo.train(early_stopping=True)
-            logger.debug("Predicting singlets/doublet probabilities and transferring noise and singlet probabilites")
-            gex.obs["solo_call"] = solo.predict(soft=False)
-            gex.obs = pd.merge(gex.obs, solo.predict(return_logits=True), left_index=True, right_index=True)
-
-        logger.debug("Subsetting")
-        filtered_gex = gex[gex.obs["solo_call"] == "singlet", :].copy()
+        filtered_gex = solo_dedoubler(adata=gex, inplace=False, device=device)
         filtered_gex.layers["pre_scar_counts"] = filtered_gex.X.copy()
         filtered_gex.X = filtered_gex.layers["scar_denoised"]
 
@@ -573,3 +704,48 @@ def scvi_clean_scrnaseq(
         logger.info(f"Writing data to {antibody_output_file.resolve()}")
 
         filtered_prot.write(antibody_output_file)
+
+
+def solo_dedoubler(
+    adata: AnnData, inplace: bool = True, device: Literal["cuda", "mps", "cpu"] = "cpu"
+) -> AnnData | None:
+    logger.debug("Setting up gene expression AnnData for SOLO")
+    scvi.model.SCVI.setup_anndata(adata)
+    logger.info("Training scVI model for SOLO")
+    vae = scvi.model.SCVI(adata)
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=RuntimeWarning, module="multiprocessing")
+        warnings.filterwarnings("ignore", category=UserWarning, module="scvi")
+        vae.train(early_stopping=True, accelerator=device, load_sparse_tensor=True, check_val_every_n_epoch=1)
+
+        logger.debug("Converting scVI model to SOLO")
+        solo = scvi.external.SOLO.from_scvi_model(vae)
+
+        logger.debug("Training SOLO model")
+        warnings.filterwarnings("ignore", category=RuntimeWarning, module="multiprocessing")
+        warnings.filterwarnings("ignore", category=UserWarning, module="torch")
+        solo.train(early_stopping=True)
+
+        logger.debug("Predicting singlets/doublet probabilities and transferring noise and singlet probabilites")
+        adata.obs["solo_call"] = solo.predict(soft=False)
+        adata.obs = pd.merge(adata.obs, solo.predict(return_logits=True), left_index=True, right_index=True)
+
+    logger.debug("Subsetting")
+    if inplace:
+        adata = adata[adata.obs["solo_call"] == "singlet", :].copy()
+        return adata
+    else:
+        return adata[adata.obs["solo_call"] == "singlet", :].copy()
+
+
+def find_device() -> str:
+    match (torch.cuda.is_available(), torch.backends.mps.is_available()):
+        case (True, False) | (True, True):
+            device = "cuda"
+            torch.set_float32_matmul_precision("high")
+        case (False, True):
+            device = "mps"
+        case (False, False):
+            device = "cpu"
+    logger.debug(f"Using {device} to generate models")
+    return device
