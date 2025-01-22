@@ -1,3 +1,9 @@
+## [0.7.1] - 2025-01-22
+
+### Changed
+
+- Switched required version of `scorphan` to 0.9.0
+
 ## [0.7.0] - 2025-01-22
 
 ### Changed
@@ -58,6 +64,7 @@
 
 - All
 
+[0.7.1]: https://github.com/milescsmith/dsd/releases/compare/0.7.0..0.7.1
 [0.7.0]: https://github.com/milescsmith/dsd/releases/compare/0.6.1..0.7.0
 [0.6.1]: https://github.com/milescsmith/dsd/releases/compare/0.6.0..0.6.1
 [0.6.0]: https://github.com/milescsmith/dsd/releases/compare/0.5.0..0.6.0
