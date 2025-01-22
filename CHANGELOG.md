@@ -1,3 +1,10 @@
+## [0.7.0] - 2025-01-22
+
+### Changed
+
+- Removed functions that duplicate those found in `scorphan`
+- Update dependencies
+
 ## [0.6.1] - 2024-09-16
 
 ### Changed
@@ -51,6 +58,8 @@
 
 - All
 
+[0.7.0]: https://github.com/milescsmith/dsd/releases/compare/0.6.1..0.7.0
+[0.6.1]: https://github.com/milescsmith/dsd/releases/compare/0.6.0..0.6.1
 [0.6.0]: https://github.com/milescsmith/dsd/releases/compare/0.5.0..0.6.0
 [0.5.0]: https://github.com/milescsmith/dsd/releases/compare/0.4.0..0.5.0
 [0.4.0]: https://github.com/milescsmith/dsd/releases/compare/0.3.1..0.4.0

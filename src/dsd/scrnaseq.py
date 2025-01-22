@@ -2,25 +2,22 @@ import contextlib
 import warnings
 from collections.abc import Iterable
 from enum import StrEnum
-from functools import partial, singledispatch
+from functools import singledispatch
 from multiprocessing import cpu_count
 from pathlib import Path
 from typing import Literal
 
 import muon as mu
 import numpy as np
-import numpy.typing as npt
 import pandas as pd
 import scanpy as sc
-import scipy as sp
+import scorphan as so
 import torch
 from anndata import AnnData, ImplicitModificationWarning
 from loguru import logger
 from mudata import MuData
 from muon import prot as pt
-from numba import float32, float64, guvectorize, int32, int64, vectorize
 from scipy.sparse import issparse
-from scipy.stats import median_abs_deviation
 from tenacity import RetryError, Retrying, stop_after_attempt
 
 from dsd.logging import init_logger
@@ -30,61 +27,6 @@ class DoubletFilter(StrEnum):
     scrublet = "scrublet"
     vaeda = "vaeda"
     solo = "solo"
-
-
-def value_percentile(arr: npt.NDArray) -> npt.NDArray:
-    # hacky way to loop over the array of counts and calculate each's quantile.
-    # not sure why percentileofscore isn't already vectorized
-    # and we have to use partial here because percentileofscore's function
-    # signature is "iter, item" instead of "item, iter", meaning I cannot just pass
-    # the array to score as the vectorized first argument
-    return np.vectorize(partial(sp.stats.percentileofscore, a=arr))(score=arr)
-
-
-# using the numba.vectorize decorator speeds this up about 13x
-@vectorize(
-    [
-        float64(float64, float64, float64),
-        float32(float32, float32, float32),
-        int64(int64, int64, int64),
-        int32(int32, int32, int32),
-    ],
-    nopython=True,
-    fastmath=True,
-)
-def above_below(x: float, lower: float, upper: float) -> float:
-    if x < lower:
-        return lower
-    elif x > upper:
-        return upper
-    else:
-        return x
-
-
-@guvectorize([(float64[:, :], float64, float64, float64[:, :])], "(m,n),(),()->(m,n)")
-def percentile_trim_rows(
-    arr: npt.NDArray, lower: float = 0.10, upper: float = 0.99, res: npt.NDArray = None
-) -> npt.NDArray:
-    """
-    Row-by-row, calculate the lower and upper percentiles and then use those to replace values that are
-    below or above them, respectively
-
-    NOTE: even though there are defaults listed here, they DO NOT WORK
-    I don't yet know why numba ignores them.
-    """
-    for i in range(arr.shape[1]):
-        lower_bounds = np.quantile(arr[:, i], lower)
-        upper_bounds = np.quantile(arr[:, i], upper)
-        res[:, i] = above_below(arr[:, i], lower_bounds, upper_bounds)
-
-
-# stolen from https://www.sc-best-practices.org/preprocessing_visualization/quality_control.html#filtering-low-quality-cells
-def is_outlier(adata, metric: str, nmads: int):
-    met = adata.obs[metric]
-    outlier = (met < np.median(met) - nmads * median_abs_deviation(met)) | (
-        np.median(met) + nmads * median_abs_deviation(met) < met
-    )
-    return outlier
 
 
 def find_isotype_controls(
@@ -167,10 +109,10 @@ def std_quality_control_anndata(
 
     logger.info("Filtering cells and genes")
     data.obs["outlier"] = (
-        is_outlier(data, "log1p_total_counts", 5)
-        | is_outlier(data, "log1p_n_genes_by_counts", 5)
-        | is_outlier(data, "pct_counts_in_top_20_genes", 5)
-        | is_outlier(data, "pct_counts_mt", 3)
+        so.ut.is_outlier(data, "log1p_total_counts", 5)
+        | so.ut.is_outlier(data, "log1p_n_genes_by_counts", 5)
+        | so.ut.is_outlier(data, "pct_counts_in_top_20_genes", 5)
+        | so.ut.is_outlier(data, "pct_counts_mt", 3)
         | (data.obs["pct_counts_mt"] > max_percent_mt)
     )
 
@@ -184,7 +126,7 @@ def std_quality_control_anndata(
                     "Both max_genes_quantile and max_total_counts were specified. Ignoring max_total_counts."
                 )
             logger.info("Calculating gene expression count percentiles")
-            data.obs["gene_counts_percentile"] = value_percentile(data.obs["total_counts"])
+            data.obs["gene_counts_percentile"] = so.ut.value_percentile(data.obs["total_counts"])
             logger.info("Filtering cells by gene expression count percentile")
             mu.pp.filter_obs(data, "gene_counts_percentile", lambda x: x < max_gene_counts_percentile)
         elif max_gene_total_counts:
@@ -339,15 +281,15 @@ def std_quality_control_mudata(
 
     logger.info("Filtering cells and genes")
     data["rna"].obs["outlier"] = (
-        is_outlier(data["rna"], "log1p_total_counts", 5)
-        | is_outlier(data["rna"], "log1p_n_genes_by_counts", 5)
-        | is_outlier(data["rna"], "pct_counts_in_top_20_genes", 5)
-        | is_outlier(data["rna"], "pct_counts_mt", 3)
+        so.ut.is_outlier(data["rna"], "log1p_total_counts", 5)
+        | so.ut.is_outlier(data["rna"], "log1p_n_genes_by_counts", 5)
+        | so.ut.is_outlier(data["rna"], "pct_counts_in_top_20_genes", 5)
+        | so.ut.is_outlier(data["rna"], "pct_counts_mt", 3)
         | (data["rna"].obs["pct_counts_mt"] > max_percent_mt)
     )
 
     logger.info("Filtering cells and antibodies")
-    data["prot"].obs["outlier"] = is_outlier(data["prot"], "log1p_total_counts", 5) | is_outlier(
+    data["prot"].obs["outlier"] = so.ut.is_outlier(data["prot"], "log1p_total_counts", 5) | so.ut.is_outlier(
         data["prot"], "log1p_n_antibodies_by_counts", 5
     )
 
@@ -362,7 +304,7 @@ def std_quality_control_mudata(
                     "Both max_genes_quantile and max_total_counts were specified. Ignoring max_total_counts."
                 )
             logger.info("Calculating gene expression count percentiles")
-            data["rna"].obs["gene_counts_percentile"] = value_percentile(data["rna"].obs["total_counts"])
+            data["rna"].obs["gene_counts_percentile"] = so.ut.value_percentile(data["rna"].obs["total_counts"])
             logger.info("Filtering cells by gene expression count percentile")
             mu.pp.filter_obs(data["rna"], "gene_counts_percentile", lambda x: x < max_gene_counts_percentile)
         elif max_gene_total_counts:
@@ -375,7 +317,7 @@ def std_quality_control_mudata(
                     "Both max_protein_counts_quantile and max_protein_total_counts were specified. Ignoring max_total_counts."
                 )
             logger.info("Calculating antibody count percentiles")
-            data["prot"].obs["protein_counts_percentile"] = value_percentile(data["prot"].obs["total_counts"])
+            data["prot"].obs["protein_counts_percentile"] = so.ut.value_percentile(data["prot"].obs["total_counts"])
             logger.info("Filtering cells by antibody count percentile")
             mu.pp.filter_obs(data["prot"], "protein_counts_percentile", lambda x: x < max_protein_counts_percentile)
         elif max_protein_total_counts:
@@ -390,7 +332,7 @@ def std_quality_control_mudata(
         for isotype in protein_isotype_controls:
             logger.info(f"Calculating {isotype} percentiles")
             values = data["prot"][:, isotype].X.toarray() if issparse(data["prot"].X) else data["prot"][:, isotype].X
-            data["prot"].obs[f"{isotype} percentile"] = value_percentile(values.flatten())
+            data["prot"].obs[f"{isotype} percentile"] = so.ut.value_percentile(values.flatten())
 
         mu.pp.intersect_obs(data)
         for isotype in protein_isotype_controls:

@@ -4,20 +4,20 @@ build-backend = "pdm.backend"
 
 [project]
 name = "dsd"
-version = "0.6.0"
+version = "0.7.0"
 description = "Process data as per data standards documents"
 authors = [
     {name = "Miles Smith", email = "miles-smith@omrf.org"},
 ]
 dependencies = [
     "scanpy[skmisc]>=1.10.2",
-    "muon>=0.1.6",
+    "muon>=0.1.7",
     "pandas>=2.2.2",
     "tenacity>=9.0.0",
     "loguru>=0.7.2",
-    "rich>=13.7.1",
-    "typer>=0.12.4",
-    "scikit-image>=0.24.0",
+    "rich>=13.9.4",
+    "typer>=0.15.1",
+    "scorphan @ git+https://github.com/milescsmith/scorphan@0.8.0",
 ]
 requires-python = ">=3.11"
 readme = "README.md"
@@ -28,7 +28,7 @@ license = {text = "BSD-3"}
 #     "jax[cuda12]>=0.4.31",
 # ]
 scvi = [
-    "scvi-tools>=1.1.5",
+    "scvi-tools>=1.2.2",
     "scar @ git+https://github.com/Novartis/scar",
 ]
 
@@ -40,9 +40,9 @@ distribution = true
 
 [tool.pdm.dev-dependencies]
 dev = [
-    "ruff>=0.6.0",
-    "pre-commit>=3.8.0",
-    "pytest>=8.3.2",
-    "nox>=2024.4.15",
-    "sourcery>=1.22.0",
+    "ruff>=0.9.2",
+    "pre-commit>=4.1.0",
+    "pytest>=8.3.4",
+    "nox>=2024.10.9",
+    "sourcery>=1.32.0",
 ]
