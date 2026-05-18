@@ -7,10 +7,10 @@ from pathlib import Path
 import nox
 
 PACKAGE = "dsd"
-PYTHON_VERSIONS = ["3.10", "3.11", "3.12"]
+PYTHON_VERSIONS = ["3.12", "3.13", "3.14"]
 os.environ["PDM_IGNORE_SAVED_PYTHON"] = "1"
 os.environ["PDM_IGNORE_ACTIVE_VENV"] = "0"
-nox.needs_version = ">=2024.4.15"
+nox.needs_version = ">=2026.4.10"
 nox.options.sessions = (
     "mypy",
     "tests",

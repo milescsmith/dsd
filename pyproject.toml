@@ -1,48 +1,44 @@
 [build-system]
-requires = ["pdm-backend"]
-build-backend = "pdm.backend"
+requires = ["uv_build>=0.7.0,<0.11.0"]
+build-backend = "uv_build"
 
 [project]
 name = "dsd"
-version = "0.7.0"
+version = "0.8.0"
 description = "Process data as per data standards documents"
 authors = [
     {name = "Miles Smith", email = "miles-smith@omrf.org"},
 ]
 dependencies = [
-    "scanpy[skmisc]>=1.10.2",
+    "scanpy[skmisc,leiden,dask-ml,scrublet]>=1.11.0",
     "muon>=0.1.7",
     "pandas>=2.2.2",
     "tenacity>=9.0.0",
     "loguru>=0.7.2",
     "rich>=13.9.4",
     "typer>=0.15.1",
-    "scorphan @ git+https://github.com/milescsmith/scorphan@0.9.0",
+    "scorphan @ git+https://github.com/milescsmith/scorphan@0.15.1",
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 readme = "README.md"
-license = {text = "BSD-3"}
+license = "BSD-3-Clause"
 
 [project.optional-dependencies]
 # cuda = [
 #     "jax[cuda12]>=0.4.31",
 # ]
 scvi = [
-    "scvi-tools>=1.2.2",
+    "scvi-tools>=1.4.3",
     "scar @ git+https://github.com/Novartis/scar",
 ]
 
 [project.scripts]
 dsd = "dsd.cli:app"
 
-[tool.pdm]
-distribution = true
-
-[tool.pdm.dev-dependencies]
+[dependency-groups]
 dev = [
-    "ruff>=0.9.2",
-    "pre-commit>=4.1.0",
-    "pytest>=8.3.4",
-    "nox>=2024.10.9",
-    "sourcery>=1.32.0",
+    "nox>=2026.4.10",
+    "pre-commit>=4.6.0",
+    "pytest>=9.0.3",
+    "ruff>=0.15.13",
 ]

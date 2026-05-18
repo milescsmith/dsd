@@ -1,3 +1,9 @@
+## [0.8.0] - 2026-05-18
+### Changed
+- switched to `uv` backend
+- increased minimum `scorphan` version to 0.15.1
+- updated `nox`, `pre-commit`, and `pytest` dev dependencies, removed `sourcery`
+
 ## [0.7.1] - 2025-01-22
 
 ### Changed
